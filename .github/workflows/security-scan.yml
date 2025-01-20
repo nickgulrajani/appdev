@@ -24,18 +24,19 @@ jobs:
       with:
         python-version: '3.x'
 
-    - name: Run Trivy vulnerability scanner
+    - name: Run Trivy vulnerability scanner and convert to SARIF
       uses: aquasecurity/trivy-action@master
       continue-on-error: true
       with:
         scan-type: 'fs'
         ignore-unfixed: true
-        format: 'json'
-        output: 'trivy-results.json'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
         severity: 'CRITICAL,HIGH'
         timeout: '10m'
         
     - name: Upload Trivy scan results
+      if: always()
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: trivy-results.sarif
@@ -71,31 +72,34 @@ jobs:
         }' > bandit-results.sarif
         
         # Add results from JSON to SARIF
-        jq -r '.results[] | {
-          ruleId: .test_id,
-          level: (if .issue_severity == "HIGH" then "error"
-                 elif .issue_severity == "MEDIUM" then "warning"
-                 else "note" end),
-          message: {
-            text: .issue_text
-          },
-          locations: [{
-            physicalLocation: {
-              artifactLocation: {
-                uri: .filename
-              },
-              region: {
-                startLine: .line_number
+        if [ -f bandit-results.json ]; then
+          jq -r '.results[] | {
+            ruleId: .test_id,
+            level: (if .issue_severity == "HIGH" then "error"
+                   elif .issue_severity == "MEDIUM" then "warning"
+                   else "note" end),
+            message: {
+              text: .issue_text
+            },
+            locations: [{
+              physicalLocation: {
+                artifactLocation: {
+                  uri: .filename
+                },
+                region: {
+                  startLine: .line_number
+                }
               }
-            }
-          }]
-        }' bandit-results.json | jq -s 'map(.)' > temp-results.json
-        
-        # Merge results into SARIF file
-        jq --argfile results temp-results.json '.runs[0].results = $results' bandit-results.sarif > temp.sarif
-        mv temp.sarif bandit-results.sarif
+            }]
+          }' bandit-results.json | jq -s 'map(.)' > temp-results.json
+          
+          # Merge results into SARIF file
+          jq --argfile results temp-results.json '.runs[0].results = $results' bandit-results.sarif > temp.sarif
+          mv temp.sarif bandit-results.sarif
+        fi
         
     - name: Upload bandit scan results
+      if: always()
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: bandit-results.sarif
@@ -129,6 +133,13 @@ jobs:
         echo "- Date: $(date)" >> security-report.md
         echo "- Branch: ${{ github.ref }}" >> security-report.md
         
+        echo "### Trivy Scan Results" >> security-report.md
+        if [ -f trivy-results.sarif ]; then
+          echo "\`\`\`" >> security-report.md
+          jq '.' trivy-results.sarif >> security-report.md
+          echo "\`\`\`" >> security-report.md
+        fi
+        
         echo "### Bandit Results" >> security-report.md
         if [ -f bandit-results.json ]; then
           echo "\`\`\`" >> security-report.md
@@ -158,4 +169,4 @@ jobs:
         path: |
           security-report.md
           *-results.json
-          bandit-results.sarif
+          *-results.sarif
