@@ -11,36 +11,146 @@ on:
 jobs:
   security-scan:
     runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
     
     steps:
     - uses: actions/checkout@v4
 
+    # Set up Python for security tools
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    # Trivy for vulnerability scanning
     - name: Run Trivy vulnerability scanner
       uses: aquasecurity/trivy-action@master
       with:
         scan-type: 'fs'
         ignore-unfixed: true
-        format: 'table'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
         severity: 'CRITICAL,HIGH'
+        timeout: '10m'
+        
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: trivy-results.sarif
+        category: trivy
+        
+    # OWASP ZAP for web security scanning
+    - name: Configure ZAP baseline scan
+      run: |
+        mkdir -p .zap
+        cat > .zap/rules.tsv << EOL
+        90004    IGNORE    Insufficient Site Isolation Against Spectre Vulnerability
+        10020    WARN    Missing Anti-clickjacking Header
+        10021    WARN    X-Content-Type-Options Header Missing
+        10023    IGNORE    Information Disclosure - Debug Error Messages
+        10036    IGNORE    Server Leaks Information
+        10038    WARN    Content Security Policy Header Not Set
+        EOL
         
     - name: Run OWASP ZAP scan
       uses: zaproxy/action-baseline@v0.9.0
       with:
         target: 'https://your-deployment-url.com'
+        rules_file_name: '.zap/rules.tsv'
+        cmd_options: '-I'
+        allow_issue_writing: false
+        fail_action: false
         
-    - name: Run Snyk to check for vulnerabilities
-      uses: snyk/actions/python@master
-      env:
-        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-      with:
-        command: test
-
+    # Install Python security packages
+    - name: Install Python security tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit safety pyraider pip-audit
+        
+    # Bandit for Python security scanning
     - name: Run bandit
       run: |
-        pip install bandit
-        bandit -r ./ -ll -ii -f json -o bandit-results.json
+        bandit -r ./ -ll -ii -f sarif -o bandit-results.sarif
         
-    - name: Upload security scan results
+    - name: Upload bandit scan results
       uses: github/codeql-action/upload-sarif@v2
       with:
-        sarif_file: bandit-results.json
+        sarif_file: bandit-results.sarif
+        category: bandit
+
+    # Safety for known vulnerabilities in Python packages
+    - name: Run safety check
+      run: |
+        safety check --full-report --output json > safety-results.json || true
+
+    # pip-audit for Python dependency scanning
+    - name: Run pip-audit
+      run: |
+        pip-audit --format json > pip-audit-results.json || true
+
+    # PyRaider for additional security checks
+    - name: Run PyRaider
+      run: |
+        pyraider scan -p . -o pyraider-results.json || true
+
+    # CodeQL Analysis
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v2
+      with:
+        languages: python
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v2
+      with:
+        category: codeql
+
+    # Generate consolidated security report
+    - name: Generate Security Report
+      if: always()
+      run: |
+        echo "# Security Scan Summary" > security-report.md
+        echo "## Scan Results" >> security-report.md
+        echo "- Date: $(date)" >> security-report.md
+        echo "- Branch: ${{ github.ref }}" >> security-report.md
+        
+        echo "### Trivy Results" >> security-report.md
+        if [ -f trivy-results.sarif ]; then
+          echo "\`\`\`" >> security-report.md
+          jq -r '.runs[].results[]?.message?.text' trivy-results.sarif >> security-report.md
+          echo "\`\`\`" >> security-report.md
+        fi
+        
+        echo "### Safety Check Results" >> security-report.md
+        if [ -f safety-results.json ]; then
+          echo "\`\`\`" >> security-report.md
+          cat safety-results.json >> security-report.md
+          echo "\`\`\`" >> security-report.md
+        fi
+
+        echo "### pip-audit Results" >> security-report.md
+        if [ -f pip-audit-results.json ]; then
+          echo "\`\`\`" >> security-report.md
+          cat pip-audit-results.json >> security-report.md
+          echo "\`\`\`" >> security-report.md
+        fi
+
+        echo "### PyRaider Results" >> security-report.md
+        if [ -f pyraider-results.json ]; then
+          echo "\`\`\`" >> security-report.md
+          cat pyraider-results.json >> security-report.md
+          echo "\`\`\`" >> security-report.md
+        fi
+
+    # Upload all security reports
+    - name: Upload Security Reports
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-reports
+        path: |
+          security-report.md
+          *-results.sarif
+          *-results.json

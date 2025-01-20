@@ -1,0 +1,10 @@
+# .zap/rules.tsv
+90004	IGNORE	Insufficient Site Isolation Against Spectre Vulnerability
+10020	IGNORE	Missing Anti-clickjacking Header
+10021	IGNORE	X-Content-Type-Options Header Missing
+10023	WARN	Information Disclosure - Debug Error Messages
+10036	WARN	Server Leaks Information via "X-Powered-By" HTTP Response Header
+10038	WARN	Content Security Policy (CSP) Header Not Set
+10098	WARN	Cross-Domain Misconfiguration
+90022	WARN	Application Error Disclosure
+90033	WARN	Loosely Scoped Cookie
