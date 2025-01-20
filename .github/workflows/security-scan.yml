@@ -30,8 +30,8 @@ jobs:
       with:
         scan-type: 'fs'
         ignore-unfixed: true
-        format: 'sarif'
-        output: 'trivy-results.sarif'
+        format: 'json'
+        output: 'trivy-results.json'
         severity: 'CRITICAL,HIGH'
         timeout: '10m'
         
@@ -41,37 +41,59 @@ jobs:
         sarif_file: trivy-results.sarif
         category: trivy
         
-    - name: Configure ZAP baseline scan
-      run: |
-        mkdir -p .zap
-        cat > .zap/rules.tsv << EOL
-        90004    IGNORE    Insufficient Site Isolation Against Spectre Vulnerability
-        10020    WARN    Missing Anti-clickjacking Header
-        10021    WARN    X-Content-Type-Options Header Missing
-        10023    IGNORE    Information Disclosure - Debug Error Messages
-        10036    IGNORE    Server Leaks Information
-        10038    WARN    Content Security Policy Header Not Set
-        EOL
-        
-    - name: Run OWASP ZAP scan
-      uses: zaproxy/action-baseline@v0.9.0
-      continue-on-error: true
-      with:
-        target: 'https://your-deployment-url.com'
-        rules_file_name: '.zap/rules.tsv'
-        cmd_options: '-I'
-        allow_issue_writing: false
-        fail_action: false
-        
     - name: Install Python security tools
       run: |
         python -m pip install --upgrade pip
         pip install bandit safety pip-audit
-        
-    - name: Run bandit
+
+    - name: Run bandit and convert to SARIF
       continue-on-error: true
       run: |
-        bandit -r ./ -ll -ii -f sarif -o bandit-results.sarif
+        # Run bandit with JSON output
+        bandit -r ./ -ll -ii -f json -o bandit-results.json
+        
+        # Convert JSON to SARIF format
+        echo '{
+          "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+          "version": "2.1.0",
+          "runs": [
+            {
+              "tool": {
+                "driver": {
+                  "name": "Bandit",
+                  "informationUri": "https://github.com/PyCQA/bandit",
+                  "rules": []
+                }
+              },
+              "results": []
+            }
+          ]
+        }' > bandit-results.sarif
+        
+        # Add results from JSON to SARIF
+        jq -r '.results[] | {
+          ruleId: .test_id,
+          level: (if .issue_severity == "HIGH" then "error"
+                 elif .issue_severity == "MEDIUM" then "warning"
+                 else "note" end),
+          message: {
+            text: .issue_text
+          },
+          locations: [{
+            physicalLocation: {
+              artifactLocation: {
+                uri: .filename
+              },
+              region: {
+                startLine: .line_number
+              }
+            }
+          }]
+        }' bandit-results.json | jq -s 'map(.)' > temp-results.json
+        
+        # Merge results into SARIF file
+        jq --argfile results temp-results.json '.runs[0].results = $results' bandit-results.sarif > temp.sarif
+        mv temp.sarif bandit-results.sarif
         
     - name: Upload bandit scan results
       uses: github/codeql-action/upload-sarif@v3
@@ -107,10 +129,10 @@ jobs:
         echo "- Date: $(date)" >> security-report.md
         echo "- Branch: ${{ github.ref }}" >> security-report.md
         
-        echo "### Trivy Results" >> security-report.md
-        if [ -f trivy-results.sarif ]; then
+        echo "### Bandit Results" >> security-report.md
+        if [ -f bandit-results.json ]; then
           echo "\`\`\`" >> security-report.md
-          jq -r '.runs[].results[]?.message?.text' trivy-results.sarif >> security-report.md
+          jq '.' bandit-results.json >> security-report.md
           echo "\`\`\`" >> security-report.md
         fi
         
@@ -135,5 +157,5 @@ jobs:
         name: security-reports
         path: |
           security-report.md
-          *-results.sarif
           *-results.json
+          bandit-results.sarif
