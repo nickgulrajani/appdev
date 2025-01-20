@@ -1,0 +1,29 @@
+name: Dependency Check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 0 * * 1'
+
+jobs:
+  dependency-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run dependency-check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: 'Your Project Name'
+        path: '.'
+        format: 'HTML'
+        
+    - name: Upload dependency check report
+      uses: actions/upload-artifact@v3
+      with:
+        name: dependency-check-report
+        path: reports
