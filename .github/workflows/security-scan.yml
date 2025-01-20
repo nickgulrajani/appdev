@@ -50,11 +50,13 @@ jobs:
     - name: Run bandit and convert to SARIF
       continue-on-error: true
       run: |
+        # Run bandit with JSON output
         bandit -r ./ -ll -ii -f json -o bandit-results.json
         
-        # Convert to SARIF
-        echo '{
-          "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+        # Create base SARIF file
+        cat > bandit-results.sarif << EOF
+        {
+          "\$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
           "version": "2.1.0",
           "runs": [
             {
@@ -68,31 +70,36 @@ jobs:
               "results": []
             }
           ]
-        }' > bandit-results.sarif
+        }
+        EOF
         
+        # Convert results if bandit output exists
         if [ -f bandit-results.json ]; then
-          jq -r '.results[] | {
-            ruleId: .test_id,
-            level: (if .issue_severity == "HIGH" then "error"
-                   elif .issue_severity == "MEDIUM" then "warning"
-                   else "note" end),
-            message: {
-              text: .issue_text
+          # Extract results and store in temporary file
+          jq '.results[] | {
+            "ruleId": .test_id,
+            "level": (if .issue_severity == "HIGH" then "error"
+                     elif .issue_severity == "MEDIUM" then "warning"
+                     else "note" end),
+            "message": {
+              "text": .issue_text
             },
-            locations: [{
-              physicalLocation: {
-                artifactLocation: {
-                  uri: .filename
+            "locations": [{
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": .filename
                 },
-                region: {
-                  startLine: .line_number
+                "region": {
+                  "startLine": .line_number
                 }
               }
             }]
-          }' bandit-results.json | jq -s 'map(.)' > temp-results.json
+          }' bandit-results.json | jq -s '.' > temp-results.json
           
-          jq --argfile results temp-results.json '.runs[0].results = $results' bandit-results.sarif > temp.sarif
+          # Merge results into SARIF file
+          jq -s '.[0].runs[0].results = .[1] | .[0]' bandit-results.sarif temp-results.json > temp.sarif
           mv temp.sarif bandit-results.sarif
+          rm temp-results.json
         fi
         
     - name: Upload bandit scan results
@@ -132,28 +139,28 @@ jobs:
         
         echo "### Trivy Scan Results" >> security-report.md
         if [ -f trivy-results.sarif ]; then
-          echo "\`\`\`" >> security-report.md
+          echo "\`\`\`json" >> security-report.md
           jq '.' trivy-results.sarif >> security-report.md
           echo "\`\`\`" >> security-report.md
         fi
         
         echo "### Bandit Results" >> security-report.md
         if [ -f bandit-results.json ]; then
-          echo "\`\`\`" >> security-report.md
+          echo "\`\`\`json" >> security-report.md
           jq '.' bandit-results.json >> security-report.md
           echo "\`\`\`" >> security-report.md
         fi
         
         echo "### Safety Check Results" >> security-report.md
         if [ -f safety-results.json ]; then
-          echo "\`\`\`" >> security-report.md
+          echo "\`\`\`json" >> security-report.md
           cat safety-results.json >> security-report.md
           echo "\`\`\`" >> security-report.md
         fi
 
         echo "### pip-audit Results" >> security-report.md
         if [ -f pip-audit-results.json ]; then
-          echo "\`\`\`" >> security-report.md
+          echo "\`\`\`json" >> security-report.md
           cat pip-audit-results.json >> security-report.md
           echo "\`\`\`" >> security-report.md
         fi
